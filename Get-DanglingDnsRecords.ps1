@@ -1,4 +1,4 @@
-﻿<# 
+<# 
 .SYNOPSIS 
     Generate dangling DNS records list from given CName list and using Azure resouce graphs
 
@@ -134,7 +134,13 @@ param
     [parameter(Mandatory = $false, ParameterSetName = 'Parameter Set 2')]
     [parameter(Mandatory = $false, ParameterSetName = 'Parameter Set 3')]
     [parameter(Mandatory = $false, ParameterSetName = 'Parameter Set 4')]
-    $OutputFileLocation = "$pwd"
+    $OutputFileLocation = "$pwd",
+
+    # Cache of Azure resources
+    [parameter(Mandatory = $false)]
+    $CacheAzResourcesInputJsonFilename = '',
+    [parameter(Mandatory = $false)]
+    $CacheAzResourcesOutputJsonFilename = ''
 )
 
 # If no params are provider just print help
@@ -153,7 +159,7 @@ If ($FileAndAzureSubscription) {
 }
 
 # List of interested Azure DNS zone suffixes delimited by "|"
-$interestedAzureDnsZones = "azurefd.net|blob.core.windows.net|azureedge.net|cloudapp.azure.com|trafficmanager.net|azurecontainer.io|azure-api.net|azurewebsites.net|cloudapp.net"
+$interestedAzureDnsZones = "azurefd.net|core.windows.net|azureedge.net|cloudapp.azure.com|trafficmanager.net|azurecontainer.io|azure-api.net|azurewebsites.net|cloudapp.net"
 
 # Run in serial or parallel by subscription
 [switch]$runParallel = $true
@@ -178,7 +184,8 @@ $resourceProviderList = @(
     [pscustomObject]@{'Service' = 'Azure Blob Storage'; 'DomainSuffix' = 'blob.core.windows.net' },
     [pscustomObject]@{'Service' = 'Azure Public IP addresses'; 'DomainSuffix' = 'cloudapp.azure.com' },
     [pscustomObject]@{'Service' = 'Azure Classic Cloud'; 'DomainSuffix' = 'cloudapp.net' },
-    [pscustomObject]@{'Service' = 'Azure Traffic Manager'; 'DomainSuffix' = 'trafficmanager.net' }
+    [pscustomObject]@{'Service' = 'Azure Traffic Manager'; 'DomainSuffix' = 'trafficmanager.net' },
+    [pscustomObject]@{'Service' = 'Azure Classic Compute'; 'DomainSuffix' = 'core.windows.net' }
 )
 
 # Function to compute the time
@@ -208,6 +215,7 @@ Function Get-ResourceProvider {
         'cloudapp.azure.com$' { $resourceProvider = 'cloudapp.azure.com'; break }
         'cloudapp.net$' { $resourceProvider = 'cloudapp.net'; break }
         'trafficmanager.net$' { $resourceProvider = 'trafficmanager.net'; break }
+        'core.windows.net$' { $resourceProvider = 'core.windows.net'; break }
     }
     return $resourceProvider
 }
@@ -275,18 +283,18 @@ Function Get-AzCNameToDnsMap {
 Function Get-AZResources {
     param
     (    
-        [int]$startId,
+        [int]$first,
 
-        [long]$endId,
+        [long]$skip,
 
         $query
     )
 
-    If ($endId -gt 0) {
-        $params = @{ 'First' = $startId; 'Skip' = $endId }
+    If ($skip -gt 0) {
+        $params = @{ 'First' = $first; 'Skip' = $skip }
     }
     else {
-        $params = @{ 'First' = $startId }
+        $params = @{ 'First' = $first }
     }
     return $(Search-AzGraph -Query $query @params)    
 }
@@ -304,7 +312,7 @@ Function Get-AZResourcesList {
     $maxRecords = 1000
     $skipRecords = 0
     Do {
-        $AzResources += Get-AzResources -startId $maxRecords -endId $skipRecords -query $query
+        $AzResources += Get-AzResources -first $maxRecords -skip $skipRecords -query $query
         $skipRecords += $maxRecords
     
     }Until($numberOfResources -le $skipRecords)
@@ -317,37 +325,38 @@ Function Get-AZResourcesHash {
     param
     (
         $query,
-        $keyName
+        $keyName,
+
+        [scriptblock]
+        $tweakResourceScript = {
+            Process { 
+                $_ 
+            }
+        }
     )
 
     $AzResources = [System.Collections.Hashtable]::new()
     $ProgessActivity = "Fetching resources"
-    $percentage = 0
-    Write-Progress $ProgessActivity -Status "$percentage precentage Complete:" -PercentComplete $percentage
     $numberOfResources = (Search-AzGraph -Query $( -join ($query, ' | count'))).Count
+
     $maxRecords = 1000
     $skipRecords = 0
     Do {
+        $percentage = $skipRecords / $numberOfResources
+        Write-Progress $ProgessActivity -Status "$($percentage.ToString('P')) Complete ($skipRecords/$numberOfResources):" -PercentComplete ($percentage*100)
 
-        $percentage = $skipRecords / $numberOfResources * 100
-        Write-Progress $ProgessActivity -Status "$percentage precentage Complete:" -PercentComplete $percentage
-        $Resources = Get-AZResources -startId $maxRecords -endId $skipRecords -query $query
+        $Resources = Get-AZResources -first $maxRecords -skip $skipRecords -query $query
     
-        $Resources |  ForEach-Object `
+        $Resources | & $tweakResourceScript | ForEach-Object `
         { 
-            $key = $psitem.$keyName.trim(" ").tolower()
-            If ($AzResources.ContainsKey($key)) {
-                $AzResources[$key] += $psitem
+            $key = $PSItem.$keyName.trim(" ").tolower()
+            If (!$AzResources.ContainsKey($key)) {
+                $AzResources.add($key, [System.Collections.ArrayList]::new())
             }
-            else {
-                $recordList = [System.Collections.ArrayList]::new()
-                [void]$recordList.add($psitem)
-                $AzResources.add($key, $recordList)
-            }
+            $AzResources[$key] += $PSItem
         }
         $skipRecords += $maxRecords
-    
-    }Until($numberOfResources -le $skipRecords)    
+    } Until($Resources.Count -lt $maxRecords)
     
     Write-Progress $ProgessActivity -Completed
     return $AzResources
@@ -405,6 +414,7 @@ Function Get-DnsRecordsWorkFlow {
                     'cloudapp.azure.com$' { $resourceProvider = 'cloudapp.azure.com'; break }
                     'cloudapp.net$' { $resourceProvider = 'cloudapp.net'; break }
                     'trafficmanager.net$' { $resourceProvider = 'trafficmanager.net'; break }
+                    'core.windows.net$' { $resourceProvider = 'core.windows.net'; break }
                 }
                 return $resourceProvider
             }
@@ -472,18 +482,18 @@ Function Get-AZResourcesListForWorkFlow {
     Function Get-AZResources {
         param
         (    
-            [int]$startId,
+            [int]$first,
     
-            [long]$endId,
+            [long]$skip,
     
             $query
         )
     
-        If ($endId -gt 0) {
-            $params = @{ 'First' = $startId; 'Skip' = $endId }
+        If ($skip -gt 0) {
+            $params = @{ 'First' = $first; 'Skip' = $skip }
         }
         else {
-            $params = @{ 'First' = $startId }
+            $params = @{ 'First' = $first }
         }
         return $(Search-AzGraph -Query $query @params)    
     }
@@ -493,7 +503,7 @@ Function Get-AZResourcesListForWorkFlow {
     $maxRecords = 1000
     $skipRecords = 0
     Do {
-        $AzResourcesList += Get-AzResources -startId $maxRecords -endId $skipRecords -query $query
+        $AzResourcesList += Get-AzResources -first $maxRecords -skip $skipRecords -query $query
         $skipRecords += $maxRecords
     
     }Until($numberOfResources -le $skipRecords)
@@ -541,11 +551,11 @@ Function Run-BySubscription {
     {
         $subscription = $PSItem        
         
-        $status = $($i / ($azSubscriptions|Measure-Object).count * 100)
+        $status = $i / ($azSubscriptions|Measure-Object).count
 
         $ActivityMessage = "Building Azure CName records List"
         
-        Write-Progress -Activity "$ActivityMessage" -Status "$status Complete:" -PercentComplete $status
+        Write-Progress -Activity "$ActivityMessage" -Status "$($status.ToString('P')) Complete:" -PercentComplete ($status*100)
         #$interestedZones = $using:interestedZones
         #$inputInterestedDnsZones = $using:inputInterestedDnsZones
 
@@ -598,6 +608,7 @@ Function Run-BySubscription {
                         'cloudapp.azure.com$' { $resourceProvider = 'cloudapp.azure.com'; break }
                         'cloudapp.net$' { $resourceProvider = 'cloudapp.net'; break }
                         'trafficmanager.net$' { $resourceProvider = 'trafficmanager.net'; break }                    
+                        'core.windows.net$' { $resourceProvider = 'core.windows.net'; break }
                     }
                     return $resourceProvider
                 }
@@ -672,9 +683,9 @@ Function Process-CNameList {
     )
     $i = 0
     foreach ($item in $cNameList) {
-        $status = $($i / ($cNameList |Measure-Object).Count * 100)
+        $status = $i / ($cNameList |Measure-Object).Count
                 
-        Write-Progress -Activity "$ActivityMessage" -Status "$status Complete:" -PercentComplete $status
+        Write-Progress -Activity "$ActivityMessage" -Status "$($status.ToString('P')) Complete:" -PercentComplete ($status*100)
         
         If ($item.FQDN) {
             $key = $item.Fqdn.trim(" ").tolower()
@@ -695,7 +706,6 @@ Function Process-CNameList {
             }
             else
             {
-            
                 If ($AzResourcesHash.ContainsKey($key)) {
                     $item | Add-Member -NotePropertyName 'AzRecord' -NotePropertyValue $($AzResourcesHash[$key]) -Force
                     [void]$AzCNameMatchingResources.add($item)
@@ -721,7 +731,8 @@ If ($InputFileDnsRecords) {
 
     switch -regex ($InputFileDnsRecords) {
         ".csv$" {
-            $inputCNameList = Import-Csv $((Get-Item $InputFileDnsRecords).FullName) -Header CName, Fqdn |
+            # APR: Assume the input file dns includes CNAME and FQDN headers instead of assuming no-headers and 1st columns are cname, fqdn
+            $inputCNameList = Import-Csv $((Get-Item $InputFileDnsRecords).FullName) | #-Header CName, Fqdn |
             Where-Object { $psitem.FQDN -match $interestedAzureDnsZones }
             break
         }
@@ -773,9 +784,9 @@ $ProgessActivity = "Loading required Modules";
 $StoreWarningPrefernce = $WarningPreference
 $WarningPreference ='SilentlyContinue'
 Foreach ($module in $AZModules) {
-    $progressValue = $progressItr / $AZModules.Length * 100
+    $progressValue = $progressItr / $AZModules.Length
 
-    Write-Progress -Activity $ProgessActivity -Status "$module  $progressValue Complete:" -PercentComplete $progressValue
+    Write-Progress -Activity $ProgessActivity -Status "$module $($progressValue.ToString('P')) Complete:" -PercentComplete ($progressValue*100)
 
     If (Get-Module -Name $module) {
         continue
@@ -803,6 +814,7 @@ $AzLibrariesLoadTime = Get-TimeToProcess $AzLibrariesLoadStart
 $AZAccountConnectStart = Get-Date
 try {
     Get-AzTenant  -ErrorAction Stop
+    $connectionDoneFromScript = $false
 }
 catch {
     Write-warning "AzAccount not connected trying to connect to AzAccount"
@@ -815,13 +827,21 @@ $AZAccountConnectTime = Get-TimeToProcess $AZAccountConnectStart
 $interestedResourcesQuery = "
     resources
     | where subscriptionId matches regex '(?i)$InputSubscriptionIdRegexFilterForAzureResourcesGraph'
-    | where type in ('microsoft.network/frontdoors','microsoft.storage/storageaccounts',
-    'microsoft.cdn/profiles/endpoints','microsoft.network/publicipaddresses',
-    'microsoft.network/trafficmanagerprofiles','microsoft.containerinstance/containergroups',
-    'microsoft.apimanagement/service','microsoft.web/sites','microsoft.web/sites/slots',
-    'microsoft.classiccompute/domainnames')
-    |mvexpand properties.hostnameConfigurations    
-    | extend dnsEndpoint = case
+    | where type in (
+        'microsoft.network/frontdoors',
+        'microsoft.storage/storageaccounts',
+        'microsoft.cdn/profiles/endpoints',
+        'microsoft.network/publicipaddresses',
+        'microsoft.network/trafficmanagerprofiles',
+        'microsoft.containerinstance/containergroups',
+        'microsoft.apimanagement/service',
+        'microsoft.web/sites',
+        'microsoft.web/sites/slots',
+        'microsoft.classiccompute/domainnames',
+        'microsoft.classicstorage/storageaccounts'
+		)
+    | mvexpand properties.hostnameConfigurations    
+	| extend dnsEndpoint = case
     (
        type =~ 'microsoft.network/frontdoors', properties.cName,
        type =~ 'microsoft.storage/storageaccounts', iff(properties['primaryEndpoints']['blob'] matches regex '(?i)(http|https)://',
@@ -833,8 +853,23 @@ $interestedResourcesQuery = "
        type =~ 'microsoft.apimanagement/service', properties_hostnameConfigurations.hostName,
        type =~ 'microsoft.web/sites', properties.defaultHostName,
        type =~ 'microsoft.web/sites/slots', properties.defaultHostName,
-       type =~ 'microsoft.classiccompute/domainnames',properties.hostName,
+       type =~ 'microsoft.classiccompute/domainnames', properties.hostName,
        ''
+    )
+    | extend dnsEndpoints = case
+    (
+        type =~ 'microsoft.apimanagement/service', 
+           pack_array(dnsEndpoint, 
+            parse_url(tostring(properties.gatewayRegionalUrl)).Host,
+            parse_url(tostring(properties.developerPortalUrl)).Host, 
+            parse_url(tostring(properties.managementApiUrl)).Host,
+            parse_url(tostring(properties.portalUrl)).Host,
+            parse_url(tostring(properties.scmUrl)).Host,
+            parse_url(tostring(properties.gatewayUrl)).Host),
+        type =~ 'microsoft.web/sites', properties.hostNames,
+       	type =~ 'microsoft.web/sites/slots', properties.hostNames,
+        type =~ 'microsoft.classicstorage/storageaccounts', properties.endpoints,
+        pack_array(dnsEndpoint)
     )
     | where isnotempty(dnsEndpoint)
     | extend resourceProvider = case
@@ -848,10 +883,11 @@ $interestedResourcesQuery = "
         dnsEndpoint endswith 'cloudapp.azure.com', 'cloudapp.azure.com',
         dnsEndpoint endswith 'cloudapp.net', 'cloudapp.net',
         dnsEndpoint endswith 'trafficmanager.net', 'trafficmanager.net',
+        dnsEndpoint endswith 'core.windows.net', 'core.windows.net',
         '' 
     )
-    | project id, tenantId, subscriptionId, type, resourceGroup, name, dnsEndpoint, properties, resourceProvider
-    | order by id asc"
+    | project id, tenantId, subscriptionId, type, resourceGroup, name, dnsEndpoint, dnsEndpoints, properties, resourceProvider
+    | order by dnsEndpoint asc, name asc, id asc"
 
 $dnszoneQuery = "resources | where type =~ 'microsoft.network/dnszones'
              | where subscriptionId matches regex '(?i)$InputSubscriptionIdRegexFilterForAzureResourcesGraph'
@@ -867,7 +903,44 @@ $AzCNameMissingResources = [System.Collections.ArrayList]::new()
 
 $AzCNameMatchingResources = [System.Collections.ArrayList]::new()
 
-$AzResourcesHash = Get-AzResourcesHash -query $interestedResourcesQuery -keyName 'dnsEndPoint'
+# APR: Cache some of the data that takes time to retrieve
+function Get-PersistedHashtable {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory=$false)]
+        [string]
+        $Filename = '',
+
+        [Parameter(Mandatory=$true)]
+        [scriptblock]
+        $Script
+        )
+
+    if (($Filename -ne '') -and (Test-Path $Filename)) {
+        Get-Content -Path $Filename -Raw | ConvertFrom-Json -AsHashtable
+    } else {
+        $result = Invoke-Command $Script
+        if ($Filename -ne '') {
+            $result | ConvertTo-JSON | Set-Content -Path $Filename
+        }
+        $result
+    }
+}
+
+# APR: Use a cached version of the Azure resources if it's available
+$AzResourcesHash = Get-PersistedHashtable -Filename $CacheAzResourcesInputJsonFilename -Script {
+    Get-AzResourcesHash -query $interestedResourcesQuery -keyName 'dnsEndPoint' -tweakResourceScript { 
+        Process { 
+            $record = $_
+
+            $record.dnsEndpoints | ForEach-Object {
+                #$record | Add-Member -NotePropertyName 'dnsEndpoint' -NotePropertyValue $_ -Force -PassThru
+                $record.dnsEndpoint = $_
+                $record
+            }
+        }
+    }
+}
 
 $numberOfAzResources = $AzResourcesHash.keys.count
 
@@ -877,101 +950,95 @@ Write-Host "Fetched $numberOfAzResources Azure resources: Total time took in mil
 
 #
 $AZDnsRecordsFetchStart = Get-Date
+$AzDnsCNameRecordSets = [System.Collections.ArrayList]::new()
+
 If ($FetchDnsRecordsFromAzureSubscription) {   
     #Build the Azure DNS interested CName records
     #   
     $azSubscriptionsForDns = Get-AzSubscription | Where-Object { $psitem.Id -match $InputSubscriptionIdRegexFilterForAzureDns }
 
-    $numberOfSubscriptionsForDns += $azSubscriptionsForDns.Count
+    $numberOfSubscriptionsForDns = $azSubscriptionsForDns.Count
     
     Write-Warning "Please standby - processing $numberOfSubscriptionsForDns subscriptions"
-
-    $AzDnsCNameRecordSets = [System.Collections.ArrayList]::new()
 
     If ($azSubscriptionsForDns -and $runParallel) {         
         $CNameToDnsMapList = Run-BySubscription $azSubscriptionsForDns $dnszoneQuery $inputDnsZoneNameRegexFilter $interestedAzureDnsZones
         
         $AzDnsCNameRecordSets += $CNameToDnsMapList | Where-Object { $psitem.Fqdn } | Sort-Object -Unique CName, Fqdn, ZoneName, ResourceGroup
 
-    }
-    elseif ($azSubscriptionsForDns) {
-    
-    
-    $ScriptDirectory = Split-Path $MyInvocation.MyCommand.Path
-    $workflowscriptPath = (Join-Path $ScriptDirectory WorkflowFunctions.ps1)
-    if(Test-path -Path $workflowscriptPath)
-    {
-    
-        . (Join-Path $ScriptDirectory WorkflowFunctions.ps1)
-
-
-        $CNameToDnsMapList = Run-BySubscriptionWorkflow $azSubscriptionsForDns $dnsZoneQuery $inputDnsZoneNameRegexFilter $interestedAzureDnsZones $InputSubscriptionIdRegexFilterForAzureDns
-        $processSummary = $CNameToDnsMapList | Where-Object {$psitem -match 'ProcessSummaryData'}
-        $numberOfDnsZones += $processSummary.wfNumberOfDnsZones
-        $numberOfDnsRecordSets += $processSummary.wfNumberOfDnsRecordSets
-        
-        Write-Warning "Please standby - processing $numberOfDnsZones DnsZones and $numberOfDnsRecordSets DnsRecordSets"
-
-        $AzDnsCNameRecordSets += $CNameToDnsMapList | Where-Object {$psitem.FQDN } |Sort-Object -Unique CName, Fqdn, ZoneName, ResourceGroup
-
-      }
-      else
-      {
-
-
-
-        #Get the Azure DNS Zones
-        
-        $dnsZones = Get-AZResourcesList -query $dnszoneQuery
-        
-        $interestedZones = $dnsZones | Where-Object { $psitem.Name -match $inputDnsZoneNameRegexFilter }
-        
-        $subsWithZones = ($interestedZones.subscriptionId | Group-Object).Name
-        
-        $numberOfDnsZonesCount = ($interestedZones | Group-Object type).count
-        
-        $global:numberOfDnsZones += $numberOfDnsZonesCount
-
-        Foreach ($item in $interestedZones) {
-            $numberOfDnsRecordS += $item.properties.numberOfRecordSets    
-        }
-        $global:numberOfDnsRecordSets += $numberOfDnsRecordS
-        
-        Write-Warning "Please standby - processing $numberOfDnsZonesCount DnsZones and $numberOfDnsRecordS DnsRecordSets"
-
-        $azSubscriptionsForDns | 
-        ForEach-Object `
+    } elseif ($azSubscriptionsForDns) {
+        $ScriptDirectory = Split-Path $MyInvocation.MyCommand.Path
+        $workflowscriptPath = (Join-Path $ScriptDirectory WorkflowFunctions.ps1)
+        if(Test-path -Path $workflowscriptPath)
         {
-            $subscription = $psitem
+            . (Join-Path $ScriptDirectory WorkflowFunctions.ps1)
 
-            If ($interestedZones) {
-                Select-AzSubscription -SubscriptionObject $subscription | Out-Null
-                $azContext = Get-AzContext
+            $CNameToDnsMapList = Run-BySubscriptionWorkflow $azSubscriptionsForDns $dnsZoneQuery $inputDnsZoneNameRegexFilter $interestedAzureDnsZones $InputSubscriptionIdRegexFilterForAzureDns
+            $processSummary = $CNameToDnsMapList | Where-Object {$psitem -match 'ProcessSummaryData'}
+            $numberOfDnsZones += $processSummary.wfNumberOfDnsZones
+            $numberOfDnsRecordSets += $processSummary.wfNumberOfDnsRecordSets
+            
+            Write-Warning "Please standby - processing $numberOfDnsZones DnsZones and $numberOfDnsRecordSets DnsRecordSets"
 
-                $interestedZones1 = $interestedZones | Where-Object { $psitem.subscriptionId -eq $subscription }
+            $AzDnsCNameRecordSets += $CNameToDnsMapList | Where-Object {$psitem.FQDN } |Sort-Object -Unique CName, Fqdn, ZoneName, ResourceGroup
 
-                If ($interestedZones1 -and $subscription.subscriptionId -in $subsWithZones) {
-                    $cNameRecords = Get-AzCNameToDnsMap $interestedZones1
-                    
-                    $i = 0
-                    foreach ($record in $cNameRecords) {
-                        $status = $($i / ($cNameRecords | Measure-Object).Count  * 100)
-                        $ActivityMessage = "Building Azure CName records List"
+        } else {
+            #Get the Azure DNS Zones
+            
+            $dnsZones = Get-AZResourcesList -query $dnszoneQuery
+            
+            $interestedZones = $dnsZones | Where-Object { $psitem.Name -match $inputDnsZoneNameRegexFilter }
+            
+            $subsWithZones = ($interestedZones.subscriptionId | Group-Object).Name
+            
+            $numberOfDnsZonesCount = ($interestedZones | Group-Object type).count
+            
+            $global:numberOfDnsZones += $numberOfDnsZonesCount
+
+            Foreach ($item in $interestedZones) {
+                $numberOfDnsRecordS += $item.properties.numberOfRecordSets    
+            }
+            $global:numberOfDnsRecordSets += $numberOfDnsRecordS
+            
+            Write-Warning "Please standby - processing $numberOfDnsZonesCount DnsZones and $numberOfDnsRecordS DnsRecordSets"
+
+            $azSubscriptionsForDns | 
+            ForEach-Object `
+            {
+                $subscription = $psitem
+
+                If ($interestedZones) {
+                    Select-AzSubscription -SubscriptionObject $subscription | Out-Null
+                    $azContext = Get-AzContext
+
+                    $interestedZones1 = $interestedZones | Where-Object { $psitem.subscriptionId -eq $subscription }
+
+                    If ($interestedZones1 -and $subscription.subscriptionId -in $subsWithZones) {
+                        $cNameRecords = Get-AzCNameToDnsMap $interestedZones1
                         
-                        Write-Progress -Activity "$ActivityMessage" -Status "$status Complete:" -PercentComplete $status
+                        $i = 0
+                        foreach ($record in $cNameRecords) {
+                            $status = $($i / ($cNameRecords | Measure-Object).Count)
+                            $ActivityMessage = "Building Azure CName records List"
+                            
+                            Write-Progress -Activity "$ActivityMessage" -Status "$($status.ToString('P')) Complete:" -PercentComplete ($status*100)
 
-                        $record | Add-Member -NotePropertyName 'subscriptionName' -NotePropertyValue $psitem.Name -Force
-                        $record | Add-Member -NotePropertyName 'subscriptionId' -NotePropertyValue $psitem.Id -Force
-                        [void]$AzDnsCNameRecordSets.add($record)
-                        $i++
+                            $record | Add-Member -NotePropertyName 'subscriptionName' -NotePropertyValue $psitem.Name -Force
+                            $record | Add-Member -NotePropertyName 'subscriptionId' -NotePropertyValue $psitem.Id -Force
+                            [void]$AzDnsCNameRecordSets.add($record)
+                            $i++
+                        }
                     }
                 }
-            }
-        }    
+            }    
+        }
     }
-    }
+
     $AzDnsRecordsFetchTime = Get-TimeToProcess $AzDnsRecordsFetchStart
     Write-Host "Completed Azure DNS records fetch workflows: Total time took in milliseconds: $AzDnsRecordsFetchTime" -ForegroundColor Yellow
+} else {
+    $AzDnsRecordsFetchTime = $null
+    $numberOfSubscriptionsForDns = $null
 }
 
 # Process input CName list from csv/json 
@@ -997,7 +1064,7 @@ If ($AzCNameMissingResources.count -gt 0) {
         Write-Warning "Following CName records missing in Azure resources"
         $AzCNameMissingResources | Format-Table
     }
-    $AzCNameMissingResources | Export-Csv $outputCNameMissingAzResourcesFile -NoTypeInformation -Force
+    $AzCNameMissingResources | Sort-Object -Property resourceProvider, fqdn, cname | Select-Object -Property resourceProvider, fqdn, cname | Export-Csv $outputCNameMissingAzResourcesFile -NoTypeInformation -Force
     Write-Host "Found $($AzCNameMissingResources.count) CName records missing Azure resources; saved the file as: $outputCNameMissingAzResourcesFile" -ForegroundColor Red
 }
 else {
@@ -1005,22 +1072,23 @@ else {
 }
 
 If ($AzResourcesHash.count -gt 0) {
-    $AzResourcesList = $AzResourcesHash.Values.toarray()
+    # APR: $AzResourcesList = $AzResourcesHash.Values.toarray()
+    $AzResourcesList = $AzResourcesHash.Values
 
-    $AzResourcesList | Export-Csv $outputResourcesFile -NoTypeInformation -Force
+    # APR: $AzResourcesList | Export-Csv $outputResourcesFile -NoTypeInformation -Force
+    $AzResourcesList | ForEach-Object { $_ | Foreach-object {[pscustomobject]$_}} | Export-Csv $outputResourcesFile -NoTypeInformation -Force
+
     Write-Host "Fetched $($AzResourcesHash.values.count) Azure resources; Saved the file as: $outputResourcesFile" -ForegroundColor Green
 }
 else {
     Write-Warning "No Azure resource records fetched"
+    $AzResourcesList = @()
 }
-
 
 If ($AzDnsCNameRecordSets.count -gt 0) {
     $AzDnsCNameRecordSets | Export-Csv $outputAzCNameRecordsFile -NoTypeInformation -Force
     Write-Host "Fetched $($AzDnsCNameRecordSets.count) Azure CName records; Saved the file as: $outputAzCNameRecordsFile" -ForegroundColor Green
-
-}
-elseif ($FetchDnsRecordsFromAzureSubscription) {
+} elseif ($FetchDnsRecordsFromAzureSubscription) {
     Write-Warning "No Azure DNS CName records fetched"
 }
 
