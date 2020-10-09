@@ -21,16 +21,18 @@ if (!$SHORTCUT) {
     $ZoneRecordsFile = (Get-Item 'allZoneRecords.csv' -ErrorAction SilentlyContinue)
     #$inputFileDnsRecordsFile = (Get-Item $inputFileDnsRecords -ErrorAction SilentlyContinue)
     #if (!$ZoneRecordsFile -or !$inputFileDnsRecordsFile -or ($ZoneRecordsFile.LastWriteTimeUtc.CompareTo($inputFileDnsRecordsFile.LastWriteTimeUtc) -gt 0)) {
-        Convert-ZoneRecordsToCnameRecords -InputFileDnsRecords $ZoneRecordsFile -OutputFileDnsRecords $inputFileDnsRecords
+        Import-Csv -Path $ZoneRecordsFile -Header 'Node', 'Record' | 
+            Convert-ZoneRecordsToCnameRecords |
+            Export-Csv $inputFileDnsRecords -IncludeTypeInformation:$false
     #}
 
     # Based on: https://github.com/Azure/Azure-Network-Security/tree/master/Cross%20Product/Find%20Dangling%20DNS%20Records
     .\Get-DanglingDnsRecords.ps1 -OutputFileLocation $OutputFileLocation -InputFileDnsRecords $inputFileDnsRecords #-CacheAzResourcesInputJsonFilename $CacheAzResourcesInputJsonFilename -FileAndAzureSubscription
 }
 
-Import-Csv (Join-Path $OutputFileLocation 'AzureCNameMissingResources.csv') |
-    Get-ResolveDnsNameResults |
-    Where-Object { $_.ResolvedDns -ne $null } |
-    Select-Object -ExpandProperty ResolvedDns |
-    Select-Object -Property Name, Server, NameHost, QueryType |
-    Export-Csv (Join-Path $OutputFileLocation 'AzureCNameMissingResourcesResolved.csv') -NoTypeInformation -Force
+Import-Csv (Join-Path $OutputFileLocation 'AzureCNameMissingResources.csv')
+    | Add-ResolveDnsMember
+    | Where-Object { $_.ResolvedDns -ne $null } 
+    | Select-Object -ExpandProperty ResolvedDns -Property *
+    | Select-Object -Property CNAME, FQDN, Name, Server, NameHost, QueryType
+    | Export-Csv (Join-Path $OutputFileLocation 'AzureCNameMissingResourcesResolved.csv') -NoTypeInformation -Force

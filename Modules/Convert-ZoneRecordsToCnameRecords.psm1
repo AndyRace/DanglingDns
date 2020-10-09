@@ -14,52 +14,55 @@ function Convert-ZoneRecordsToCnameRecords {
 [cmdletbinding()]
     param
     (   
-        [parameter(Mandatory = $true)]
-        [string]$InputFileDnsRecords,
-
-        [parameter(Mandatory = $true)]
-        [string]$OutputFileDnsRecords
+        [parameter(Mandatory = $true, ValueFromPipelineByPropertyName)]
+        [string]$Node,
+        [parameter(Mandatory = $true, ValueFromPipelineByPropertyName)]
+        [string]$Record
     )
 
-    #List of resource providers
-    $resourceProviderList = @(
-        [pscustomObject]@{'Service' = 'Azure API Management'; 'DomainSuffix' = 'azure-api.net' },
-        [pscustomObject]@{'Service' = 'Azure Container Instance'; 'DomainSuffix' = 'azurecontainer.io' },
-        [pscustomObject]@{'Service' = 'Azure CDN'; 'DomainSuffix' = 'azureedge.net' },
-        [pscustomObject]@{'Service' = 'Azure Front Door'; 'DomainSuffix' = 'azurefd.net' },
-        [pscustomObject]@{'Service' = 'Azure App Service'; 'DomainSuffix' = 'azurewebsites.net' },
-        [pscustomObject]@{'Service' = 'Azure Blob Storage'; 'DomainSuffix' = 'blob.core.windows.net' },
-        [pscustomObject]@{'Service' = 'Azure Public IP addresses'; 'DomainSuffix' = 'cloudapp.azure.com' },
-        [pscustomObject]@{'Service' = 'Azure Classic Cloud'; 'DomainSuffix' = 'cloudapp.net' },
-        [pscustomObject]@{'Service' = 'Azure Traffic Manager'; 'DomainSuffix' = 'trafficmanager.net' },
-        [pscustomObject]@{'Service' = 'Azure Classic Compute'; 'DomainSuffix' = 'core.windows.net' }
-    )
+    begin {
+        #List of resource providers
+        $resourceProviderList = @(
+            [pscustomObject]@{'Service' = 'Azure API Management'; 'DomainSuffix' = 'azure-api.net' },
+            [pscustomObject]@{'Service' = 'Azure Container Instance'; 'DomainSuffix' = 'azurecontainer.io' },
+            [pscustomObject]@{'Service' = 'Azure CDN'; 'DomainSuffix' = 'azureedge.net' },
+            [pscustomObject]@{'Service' = 'Azure Front Door'; 'DomainSuffix' = 'azurefd.net' },
+            [pscustomObject]@{'Service' = 'Azure App Service'; 'DomainSuffix' = 'azurewebsites.net' },
+            [pscustomObject]@{'Service' = 'Azure Blob Storage'; 'DomainSuffix' = 'blob.core.windows.net' },
+            [pscustomObject]@{'Service' = 'Azure Public IP addresses'; 'DomainSuffix' = 'cloudapp.azure.com' },
+            [pscustomObject]@{'Service' = 'Azure Classic Cloud'; 'DomainSuffix' = 'cloudapp.net' },
+            [pscustomObject]@{'Service' = 'Azure Traffic Manager'; 'DomainSuffix' = 'trafficmanager.net' },
+            [pscustomObject]@{'Service' = 'Azure Classic Compute'; 'DomainSuffix' = 'core.windows.net' }
+        )
 
-    $allKnownScopes = @(
-        # [pscustomObject]@{ Service = 'Azure Active Directory'; DomainSuffix = 'graph.windows.net/*' },
-        [pscustomObject]@{ Service = 'SQL Database'; DomainSuffix = 'database.windows.net' },
-        [pscustomObject]@{ Service = 'Access Control Service'; DomainSuffix = 'accesscontrol.windows.net' },
-        [pscustomObject]@{ Service = 'Service Bus'; DomainSuffix = 'servicebus.windows.net' },
-        [pscustomObject]@{ Service = 'File Service'; DomainSuffix = 'file.core.windows.net' },
-        [pscustomObject]@{ Service = 'Mobile Services'; DomainSuffix = 'azure-mobile.net' },
-        [pscustomObject]@{ Service = 'Media Services'; DomainSuffix = 'origin.mediaservices.windows.net' },
-        [pscustomObject]@{ Service = 'Visual Studio Online'; DomainSuffix = 'visualstudio.com' },
-        [pscustomObject]@{ Service = 'BizTalk Services'; DomainSuffix = 'biztalk.windows.net' },
-        [pscustomObject]@{ Service = 'CDN'; DomainSuffix = 'vo.msecnd.net' },
-        [pscustomObject]@{ Service = 'Traffic Manager'; DomainSuffix = 'trafficmanager.net' },
-        [pscustomObject]@{ Service = 'Active Directory'; DomainSuffix = 'onmicrosoft.com' },
-        [pscustomObject]@{ Service = 'Management Services'; DomainSuffix = 'management.core.windows.net' }
-    )
+        $allKnownScopes = @(
+            # [pscustomObject]@{ Service = 'Azure Active Directory'; DomainSuffix = 'graph.windows.net/*' },
+            [pscustomObject]@{ Service = 'SQL Database'; DomainSuffix = 'database.windows.net' },
+            [pscustomObject]@{ Service = 'Access Control Service'; DomainSuffix = 'accesscontrol.windows.net' },
+            [pscustomObject]@{ Service = 'Service Bus'; DomainSuffix = 'servicebus.windows.net' },
+            [pscustomObject]@{ Service = 'File Service'; DomainSuffix = 'file.core.windows.net' },
+            [pscustomObject]@{ Service = 'Mobile Services'; DomainSuffix = 'azure-mobile.net' },
+            [pscustomObject]@{ Service = 'Media Services'; DomainSuffix = 'origin.mediaservices.windows.net' },
+            [pscustomObject]@{ Service = 'Visual Studio Online'; DomainSuffix = 'visualstudio.com' },
+            [pscustomObject]@{ Service = 'BizTalk Services'; DomainSuffix = 'biztalk.windows.net' },
+            [pscustomObject]@{ Service = 'CDN'; DomainSuffix = 'vo.msecnd.net' },
+            [pscustomObject]@{ Service = 'Traffic Manager'; DomainSuffix = 'trafficmanager.net' },
+            [pscustomObject]@{ Service = 'Active Directory'; DomainSuffix = 'onmicrosoft.com' },
+            [pscustomObject]@{ Service = 'Management Services'; DomainSuffix = 'management.core.windows.net' }
+        )
 
-    $interestedAzureDnsZones = ($resourceProviderList + $allKnownScopes).DomainSuffix -join '|'
+        $interestedAzureDnsZones = ($resourceProviderList + $allKnownScopes).DomainSuffix -join '|'
+        $domainSuffixPatternMatch = "^CNAME (.*\.($interestedAzureDnsZones))\.$"
+    }
 
-    $domainSuffixPatternMatch = "^CNAME .*\.($interestedAzureDnsZones)\.$"
+    process {
+        if ($Node -imatch "^(?!awverify\.|cdnverify\.|selector\d._domainkey)" -and $Record -imatch $domainSuffixPatternMatch) {
+            [pscustomobject]@{CNAME=$Node; FQDN=$Matches[1]}
+        }
+    }
 
-    Import-Csv -Path $InputFileDnsRecords -Header 'Record', 'Value' | Where-Object { 
-            $_.Record -imatch "^(?!awverify\.|cdnverify\.|selector\d._domainkey)" -and $_.Value -imatch $domainSuffixPatternMatch
-        } | ForEach-Object {
-            [pscustomobject]@{CNAME=$_.Record; FQDN=$_.Value.substring(6).TrimEnd('.')}
-        } | Export-Csv $OutputFileDnsRecords -IncludeTypeInformation:$false
+    end {
+    }
 }
 
 Export-ModuleMember -Function Convert-ZoneRecordsToCnameRecords

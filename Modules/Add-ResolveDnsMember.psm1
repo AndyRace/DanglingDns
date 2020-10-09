@@ -1,4 +1,4 @@
-function Get-ResolveDnsNameResults {
+function Add-ResolveDnsMember {
     [cmdletbinding()]
     param
     (   
@@ -10,19 +10,15 @@ function Get-ResolveDnsNameResults {
     
     process{
         # "resourceProvider","CNAME","FQDN"
-        $resolvedDns = Resolve-DnsName $record.CNAME -ErrorAction SilentlyContinue
+        $record | 
+            Add-Member -NotePropertyName 'ResolvedDns' -NotePropertyValue (Resolve-DnsName $record.CNAME -ErrorAction SilentlyContinue) -PassThru
 
         # if ($resolvedDns -and $resolvedDns.IP4Address -eq '0.0.0.0') {
         #     # The name resolves to a null address
         # }
-
-        @{
-            Record = $record
-            ResolvedDns = $resolvedDns
-        }
     }
 
     end {}
 }
 
-Export-ModuleMember -Function Get-ResolveDnsNameResults
+Export-ModuleMember -Function Add-ResolveDnsMember
