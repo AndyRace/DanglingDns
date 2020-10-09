@@ -1064,7 +1064,7 @@ If ($AzCNameMissingResources.count -gt 0) {
         Write-Warning "Following CName records missing in Azure resources"
         $AzCNameMissingResources | Format-Table
     }
-    $AzCNameMissingResources | Sort-Object -Property resourceProvider, fqdn, cname | Select-Object -Property resourceProvider, fqdn, cname | Export-Csv $outputCNameMissingAzResourcesFile -NoTypeInformation -Force
+    $AzCNameMissingResources | Sort-Object -Property resourceProvider, fqdn, cname | Select-Object -Property resourceProvider, cname, fqdn | Export-Csv $outputCNameMissingAzResourcesFile -NoTypeInformation -Force
     Write-Host "Found $($AzCNameMissingResources.count) CName records missing Azure resources; saved the file as: $outputCNameMissingAzResourcesFile" -ForegroundColor Red
 }
 else {
