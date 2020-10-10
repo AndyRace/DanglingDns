@@ -1,3 +1,8 @@
+$VerbosePreference = "SilentlyContinue"
+$ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
+Set-PSDebug -Strict
+
 function Add-ResolveDnsMember {
     [cmdletbinding()]
     param

@@ -1,3 +1,8 @@
+$VerbosePreference = "SilentlyContinue"
+$ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
+Set-PSDebug -Strict
+
 <#
 Azure Front Door            microsoft.network/frontdoors                abc.azurefd.net
 Azure Blob Storage          microsoft.storage/storageaccounts           abc.blob.core.windows.net
@@ -35,7 +40,7 @@ function Convert-ZoneRecordsToCnameRecords {
             [pscustomObject]@{'Service' = 'Azure Classic Compute'; 'DomainSuffix' = 'core.windows.net' }
         )
 
-        $allKnownScopes = @(
+        $allOtherProviders = @(
             # [pscustomObject]@{ Service = 'Azure Active Directory'; DomainSuffix = 'graph.windows.net/*' },
             [pscustomObject]@{ Service = 'SQL Database'; DomainSuffix = 'database.windows.net' },
             [pscustomObject]@{ Service = 'Access Control Service'; DomainSuffix = 'accesscontrol.windows.net' },
@@ -50,14 +55,15 @@ function Convert-ZoneRecordsToCnameRecords {
             [pscustomObject]@{ Service = 'Active Directory'; DomainSuffix = 'onmicrosoft.com' },
             [pscustomObject]@{ Service = 'Management Services'; DomainSuffix = 'management.core.windows.net' }
         )
-
-        $interestedAzureDnsZones = ($resourceProviderList + $allKnownScopes).DomainSuffix -join '|'
-        $domainSuffixPatternMatch = "^CNAME (.*\.($interestedAzureDnsZones))\.$"
+        
+        $interestedAzureDnsZones = (($resourceProviderList + $allOtherProviders).DomainSuffix | Select-Object -Unique) -join '|'
+        $nodePrefixPatternMatch = "^(?!awverify\.|cdnverify\.|selector\d._domainkey\.)"
+        $domainSuffixPatternMatch = "^(CNAME )?(?!awverify\.|cdnverify\.|selector\d._domainkey)(?<fqdn>.*\.($interestedAzureDnsZones))\.?$"
     }
 
     process {
-        if ($Node -imatch "^(?!awverify\.|cdnverify\.|selector\d._domainkey)" -and $Record -imatch $domainSuffixPatternMatch) {
-            [pscustomobject]@{CNAME=$Node; FQDN=$Matches[1]}
+        if ($Node -imatch $nodePrefixPatternMatch -and $Record -imatch $domainSuffixPatternMatch) {
+            [pscustomobject]@{CNAME=$Node; FQDN=$Matches.fqdn}
         }
     }
 
