@@ -158,8 +158,8 @@ If ($FileAndAzureSubscription) {
     $FetchDnsRecordsFromAzureSubscription = $true
 }
 
-# List of interested Azure DNS zone suffixes delimited by "|"
-$interestedAzureDnsZones = "azurefd.net|core.windows.net|azureedge.net|cloudapp.azure.com|trafficmanager.net|azurecontainer.io|azure-api.net|azurewebsites.net|cloudapp.net"
+# APR: List of interested Azure DNS zone suffixes delimited by "|"
+# APR: $interestedAzureDnsZones = "azurefd.net|core.windows.net|azureedge.net|cloudapp.azure.com|trafficmanager.net|azurecontainer.io|azure-api.net|azurewebsites.net|cloudapp.net"
 
 # Run in serial or parallel by subscription
 [switch]$runParallel = $true
@@ -187,6 +187,24 @@ $resourceProviderList = @(
     [pscustomObject]@{'Service' = 'Azure Traffic Manager'; 'DomainSuffix' = 'trafficmanager.net' },
     [pscustomObject]@{'Service' = 'Azure Classic Compute'; 'DomainSuffix' = 'core.windows.net' }
 )
+
+# APR: TODO: Include the following as even though they're not being retrieved from Azure if any of these appear we know we need to extend this script
+$allOtherProviders = @(
+    # [pscustomObject]@{ Service = 'Azure Active Directory'; DomainSuffix = 'graph.windows.net/*' },
+    [pscustomObject]@{ Service = 'SQL Database'; DomainSuffix = 'database.windows.net' },
+    [pscustomObject]@{ Service = 'Access Control Service'; DomainSuffix = 'accesscontrol.windows.net' },
+    [pscustomObject]@{ Service = 'Service Bus'; DomainSuffix = 'servicebus.windows.net' },
+    [pscustomObject]@{ Service = 'File Service'; DomainSuffix = 'file.core.windows.net' },
+    [pscustomObject]@{ Service = 'Mobile Services'; DomainSuffix = 'azure-mobile.net' },
+    [pscustomObject]@{ Service = 'Media Services'; DomainSuffix = 'origin.mediaservices.windows.net' },
+    [pscustomObject]@{ Service = 'Visual Studio Online'; DomainSuffix = 'visualstudio.com' },
+    [pscustomObject]@{ Service = 'BizTalk Services'; DomainSuffix = 'biztalk.windows.net' },
+    [pscustomObject]@{ Service = 'CDN'; DomainSuffix = 'vo.msecnd.net' },
+    [pscustomObject]@{ Service = 'Traffic Manager'; DomainSuffix = 'trafficmanager.net' },
+    [pscustomObject]@{ Service = 'Active Directory'; DomainSuffix = 'onmicrosoft.com' },
+    [pscustomObject]@{ Service = 'Management Services'; DomainSuffix = 'management.core.windows.net' }
+)
+$interestedAzureDnsZones = (($resourceProviderList + $allOtherProviders).DomainSuffix | Select-Object -Unique) -join '|'
 
 # Function to compute the time
 #
@@ -731,8 +749,7 @@ If ($InputFileDnsRecords) {
 
     switch -regex ($InputFileDnsRecords) {
         ".csv$" {
-            # APR: Assume the input file dns includes CNAME and FQDN headers instead of assuming no-headers and 1st columns are cname, fqdn
-            $inputCNameList = Import-Csv $((Get-Item $InputFileDnsRecords).FullName) | #-Header CName, Fqdn |
+            $inputCNameList = Import-Csv $((Get-Item $InputFileDnsRecords).FullName) -Header CName, Fqdn |
             Where-Object { $psitem.FQDN -match $interestedAzureDnsZones }
             break
         }
