@@ -26,7 +26,8 @@ function Convert-ZoneRecordsToCnameRecords {
     )
 
     begin {
-        #List of resource providers
+        # List of resource providers taken from the Dangling Dns script
+        # TODO: Share it between them
         $resourceProviderList = @(
             [pscustomObject]@{'Service' = 'Azure API Management'; 'DomainSuffix' = 'azure-api.net' },
             [pscustomObject]@{'Service' = 'Azure Container Instance'; 'DomainSuffix' = 'azurecontainer.io' },
@@ -41,21 +42,21 @@ function Convert-ZoneRecordsToCnameRecords {
         )
 
         $allOtherProviders = @(
-            # [pscustomObject]@{ Service = 'Azure Active Directory'; DomainSuffix = 'graph.windows.net/*' },
-            [pscustomObject]@{ Service = 'SQL Database'; DomainSuffix = 'database.windows.net' },
-            [pscustomObject]@{ Service = 'Access Control Service'; DomainSuffix = 'accesscontrol.windows.net' },
-            [pscustomObject]@{ Service = 'Service Bus'; DomainSuffix = 'servicebus.windows.net' },
-            [pscustomObject]@{ Service = 'File Service'; DomainSuffix = 'file.core.windows.net' },
-            [pscustomObject]@{ Service = 'Mobile Services'; DomainSuffix = 'azure-mobile.net' },
-            [pscustomObject]@{ Service = 'Media Services'; DomainSuffix = 'origin.mediaservices.windows.net' },
-            [pscustomObject]@{ Service = 'Visual Studio Online'; DomainSuffix = 'visualstudio.com' },
-            [pscustomObject]@{ Service = 'BizTalk Services'; DomainSuffix = 'biztalk.windows.net' },
-            [pscustomObject]@{ Service = 'CDN'; DomainSuffix = 'vo.msecnd.net' },
-            [pscustomObject]@{ Service = 'Traffic Manager'; DomainSuffix = 'trafficmanager.net' },
-            [pscustomObject]@{ Service = 'Active Directory'; DomainSuffix = 'onmicrosoft.com' },
-            [pscustomObject]@{ Service = 'Management Services'; DomainSuffix = 'management.core.windows.net' }
+            # [pscustomObject]@'{ Service = 'Azure Active Directory'; DomainSuffix = 'graph.windows.net/*' },
+            [pscustomObject]@{ 'Service' = 'SQL Database'; DomainSuffix = 'database.windows.net' },
+            [pscustomObject]@{ 'Service' = 'Access Control Service'; DomainSuffix = 'accesscontrol.windows.net' },
+            [pscustomObject]@{ 'Service' = 'Service Bus'; DomainSuffix = 'servicebus.windows.net' },
+            [pscustomObject]@{ 'Service' = 'File Service'; DomainSuffix = 'file.core.windows.net' },
+            [pscustomObject]@{ 'Service' = 'Mobile Services'; DomainSuffix = 'azure-mobile.net' },
+            [pscustomObject]@{ 'Service' = 'Media Services'; DomainSuffix = 'origin.mediaservices.windows.net' },
+            [pscustomObject]@{ 'Service' = 'Visual Studio Online'; DomainSuffix = 'visualstudio.com' },
+            [pscustomObject]@{ 'Service' = 'BizTalk Services'; DomainSuffix = 'biztalk.windows.net' },
+            [pscustomObject]@{ 'Service' = 'CDN'; DomainSuffix = 'vo.msecnd.net' },
+            [pscustomObject]@{ 'Service' = 'Traffic Manager'; DomainSuffix = 'trafficmanager.net' },
+            [pscustomObject]@{ 'Service' = 'Active Directory'; DomainSuffix = 'onmicrosoft.com' },
+            [pscustomObject]@{ 'Service' = 'Management Services'; DomainSuffix = 'management.core.windows.net' }
         )
-        
+
         $interestedAzureDnsZones = (($resourceProviderList + $allOtherProviders).DomainSuffix | Select-Object -Unique) -join '|'
         $nodePrefixPatternMatch = "^(?!awverify\.|cdnverify\.|selector\d._domainkey\.)"
         $domainSuffixPatternMatch = "^(CNAME )?(?!awverify\.|cdnverify\.|selector\d._domainkey)(?<fqdn>.*\.($interestedAzureDnsZones))\.?$"
